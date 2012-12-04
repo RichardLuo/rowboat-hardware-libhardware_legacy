@@ -72,10 +72,10 @@ public:
         virtual ~AudioPolicyManagerBase();
 
         // AudioPolicyInterface
-        virtual status_t setDeviceConnectionState(AudioSystem::audio_devices device,
+        virtual status_t setDeviceConnectionState(audio_devices_t device,
                                                           AudioSystem::device_connection_state state,
                                                           const char *device_address);
-        virtual AudioSystem::device_connection_state getDeviceConnectionState(AudioSystem::audio_devices device,
+        virtual AudioSystem::device_connection_state getDeviceConnectionState(audio_devices_t device,
                                                                               const char *device_address);
         virtual void setPhoneState(int state);
         virtual void setForceUse(AudioSystem::force_use usage, AudioSystem::forced_config config);
@@ -123,8 +123,8 @@ public:
         // return the enabled output devices for the given stream type
         virtual audio_devices_t getDevicesForStream(AudioSystem::stream_type stream);
 
-        virtual audio_io_handle_t getOutputForEffect(effect_descriptor_t *desc);
-        virtual status_t registerEffect(effect_descriptor_t *desc,
+        virtual audio_io_handle_t getOutputForEffect(const effect_descriptor_t *desc);
+        virtual status_t registerEffect(const effect_descriptor_t *desc,
                                         audio_io_handle_t io,
                                         uint32_t strategy,
                                         int session,
@@ -133,6 +133,7 @@ public:
         virtual status_t setEffectEnabled(int id, bool enabled);
 
         virtual bool isStreamActive(int stream, uint32_t inPastMs = 0) const;
+        virtual bool isSourceActive(audio_source_t source) const;
 
         virtual status_t dump(int fd);
 
@@ -226,6 +227,8 @@ protected:
         static const VolumeCurvePoint sSpeakerSonificationVolumeCurve[AudioPolicyManagerBase::VOLCNT];
         static const VolumeCurvePoint sDefaultSystemVolumeCurve[AudioPolicyManagerBase::VOLCNT];
         static const VolumeCurvePoint sHeadsetSystemVolumeCurve[AudioPolicyManagerBase::VOLCNT];
+        static const VolumeCurvePoint sDefaultVoiceVolumeCurve[AudioPolicyManagerBase::VOLCNT];
+        static const VolumeCurvePoint sSpeakerVoiceVolumeCurve[AudioPolicyManagerBase::VOLCNT];
         // default volume curves per stream and device category. See initializeVolumeCurves()
         static const VolumeCurvePoint *sVolumeProfiles[AUDIO_STREAM_CNT][DEVICE_CATEGORY_CNT];
 
@@ -330,7 +333,7 @@ protected:
         //  2 access to either current device selection (fromCache == true) or
         // "future" device selection (fromCache == false) when called from a context
         //  where conditions are changing (setDeviceConnectionState(), setPhoneState()...) AND
-        //  before updateDeviceForStrategy() is called.
+        //  before updateDevicesAndOutputs() is called.
         virtual audio_devices_t getDeviceForStrategy(routing_strategy strategy,
                                                      bool fromCache);
 
@@ -345,7 +348,9 @@ protected:
         virtual audio_devices_t getDeviceForInputSource(int inputSource);
 
         // return io handle of active input or 0 if no input is active
-        audio_io_handle_t getActiveInput();
+        //    Only considers inputs from physical devices (e.g. main mic, headset mic) when
+        //    ignoreVirtualInputs is true.
+        audio_io_handle_t getActiveInput(bool ignoreVirtualInputs = true);
 
         // initialize volume curves for each strategy and device category
         void initializeVolumeCurves();
@@ -400,7 +405,7 @@ protected:
         // checks and if necessary changes outputs used for all strategies.
         // must be called every time a condition that affects the output choice for a given strategy
         // changes: connected device, phone state, force use...
-        // Must be called before updateDeviceForStrategy()
+        // Must be called before updateDevicesAndOutputs()
         void checkOutputForStrategy(routing_strategy strategy);
 
         // Same as checkOutputForStrategy() but for a all strategies in order of priority
@@ -424,7 +429,7 @@ protected:
         // cached values are used by getDeviceForStrategy() if parameter fromCache is true.
          // Must be called after checkOutputForAllStrategies()
 
-        void updateDeviceForStrategy();
+        void updateDevicesAndOutputs();
 
         // true if current platform requires a specific output to be opened for this particular
         // set of parameters. This function is called by getOutput() and is implemented by platform
@@ -452,7 +457,8 @@ protected:
         // extract one device relevant for volume control from multiple device selection
         static audio_devices_t getDeviceForVolume(audio_devices_t device);
 
-        SortedVector<audio_io_handle_t> getOutputsForDevice(audio_devices_t device);
+        SortedVector<audio_io_handle_t> getOutputsForDevice(audio_devices_t device,
+                        DefaultKeyedVector<audio_io_handle_t, AudioOutputDescriptor *> openOutputs);
         bool vectorsEqual(SortedVector<audio_io_handle_t>& outputs1,
                                            SortedVector<audio_io_handle_t>& outputs2);
 
@@ -498,10 +504,16 @@ protected:
 
         AudioPolicyClientInterface *mpClientInterface;  // audio policy client interface
         audio_io_handle_t mPrimaryOutput;              // primary output handle
-        DefaultKeyedVector<audio_io_handle_t, AudioOutputDescriptor *> mOutputs;   // list of output descriptors
+        // list of descriptors for outputs currently opened
+        DefaultKeyedVector<audio_io_handle_t, AudioOutputDescriptor *> mOutputs;
+        // copy of mOutputs before setDeviceConnectionState() opens new outputs
+        // reset to mOutputs when updateDevicesAndOutputs() is called.
+        DefaultKeyedVector<audio_io_handle_t, AudioOutputDescriptor *> mPreviousOutputs;
         DefaultKeyedVector<audio_io_handle_t, AudioInputDescriptor *> mInputs;     // list of input descriptors
         audio_devices_t mAvailableOutputDevices; // bit field of all available output devices
         audio_devices_t mAvailableInputDevices; // bit field of all available input devices
+                                                // without AUDIO_DEVICE_BIT_IN to allow direct bit
+                                                // field comparisons
         int mPhoneState;                                                    // current phone state
         AudioSystem::forced_config mForceUse[AudioSystem::NUM_FORCE_USE];   // current forced use configuration
 
@@ -524,13 +536,12 @@ protected:
         bool    mA2dpSuspended;  // true if A2DP output is suspended
         bool mHasA2dp; // true on platforms with support for bluetooth A2DP
         bool mHasUsb; // true on platforms with support for USB audio
+        bool mHasRemoteSubmix; // true on platforms with support for remote presentation of a submix
         audio_devices_t mAttachedOutputDevices; // output devices always available on the platform
         audio_devices_t mDefaultOutputDevice; // output device selected by default at boot time
                                               // (must be in mAttachedOutputDevices)
 
         Vector <HwModule *> mHwModules;
-        Vector <IOProfile *> mOutputProfiles; // output profiles loaded from audio_policy.conf
-        Vector <IOProfile *> mInputProfiles;  // input profiles loaded from audio_policy.conf
 
 #ifdef AUDIO_POLICY_TEST
         Mutex   mLock;
@@ -553,6 +564,7 @@ private:
         // updates device caching and output for streams that can influence the
         //    routing of notifications
         void handleNotificationRoutingForStream(AudioSystem::stream_type stream);
+        static bool isVirtualInputDevice(audio_devices_t device);
 };
 
 };

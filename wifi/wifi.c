@@ -385,7 +385,19 @@ int update_ctrl_interface(const char *config_file) {
     } else {
         strcpy(ifc, CONTROL_IFACE_PATH);
     }
-    if ((sptr = strstr(pbuf, "ctrl_interface="))) {
+    /*
+     * if there is a "ctrl_interface=<value>" entry, re-write it ONLY if it is
+     * NOT a directory.  The non-directory value option is an Android add-on
+     * that allows the control interface to be exchanged through an environment
+     * variable (initialized by the "init" program when it starts a service
+     * with a "socket" option).
+     *
+     * The <value> is deemed to be a directory if the "DIR=" form is used or
+     * the value begins with "/".
+     */
+    if ((sptr = strstr(pbuf, "ctrl_interface=")) &&
+        (!strstr(pbuf, "ctrl_interface=DIR=")) &&
+        (!strstr(pbuf, "ctrl_interface=/"))) {
         char *iptr = sptr + strlen("ctrl_interface=");
         int ilen = 0;
         int mlen = strlen(ifc);
@@ -954,10 +966,16 @@ int wifi_ctrl_recv(int index, char *reply, size_t *reply_len)
     }
     if (rfds[0].revents & POLLIN) {
         return wpa_ctrl_recv(monitor_conn[index], reply, reply_len);
-    } else {
-        return -2;
+    } else if (rfds[1].revents & POLLIN) {
+        /* Close only the p2p sockets on receive side
+         * see wifi_close_supplicant_connection()
+         */
+        if (index == SECONDARY) {
+            ALOGD("close sockets %d", index);
+            wifi_close_sockets(index);
+        }
     }
-    return 0;
+    return -2;
 }
 
 int wifi_wait_on_socket(int index, char *buf, size_t buflen)
@@ -1064,9 +1082,9 @@ void wifi_close_supplicant_connection(const char *ifname)
          * STA connection does not need it since supplicant gets shutdown
          */
         TEMP_FAILURE_RETRY(write(exit_sockets[SECONDARY][0], "T", 1));
-        wifi_close_sockets(SECONDARY);
-        //closing p2p connection does not need a wait on
-        //supplicant stop
+        /* p2p sockets are closed after the monitor thread
+         * receives the terminate on the exit socket
+         */
         return;
     }
 

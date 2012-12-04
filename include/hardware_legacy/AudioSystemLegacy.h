@@ -226,6 +226,8 @@ public:
         TX_DISABLE    = 0
     };
 
+    // DO NOT USE: the "audio_devices" enumeration below is obsolete, use type "audio_devices_t" and
+    //   audio device enumeration from system/audio.h instead.
     enum audio_devices {
         // output devices
         DEVICE_OUT_EARPIECE = 0x1,
@@ -286,6 +288,7 @@ public:
         FORCE_ANALOG_DOCK,
         FORCE_DIGITAL_DOCK,
         FORCE_NO_BT_A2DP,
+        FORCE_SYSTEM_ENFORCED,
         NUM_FORCE_CONFIG,
         FORCE_DEFAULT = FORCE_NONE
     };
@@ -296,6 +299,7 @@ public:
         FOR_MEDIA,
         FOR_RECORD,
         FOR_DOCK,
+        FOR_SYSTEM,
         NUM_FORCE_USE
     };
 
@@ -318,10 +322,16 @@ public:
 
 #if 1
     static bool isOutputDevice(audio_devices device) {
-        return audio_is_output_device((audio_devices_t)device);
+        if ((popcount(device) == 1) && ((device & ~DEVICE_OUT_ALL) == 0))
+             return true;
+         else
+             return false;
     }
     static bool isInputDevice(audio_devices device) {
-        return audio_is_input_device((audio_devices_t)device);
+        if ((popcount(device) == 1) && ((device & ~DEVICE_IN_ALL) == 0))
+             return true;
+         else
+             return false;
     }
     static bool isA2dpDevice(audio_devices device) {
         return audio_is_a2dp_device((audio_devices_t)device);
